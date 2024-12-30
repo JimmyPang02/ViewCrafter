@@ -403,10 +403,14 @@ def generate_traj_txt(c2ws_anchor,H,W,fs,c,phi, theta, r,frame,device,viz_traj=F
 
 def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_traj=False,save_dir=None):
     """
+    
     使用BTO-RRT生成的相机轨迹来创建相机姿态。
     
     Args:
-        c2ws_anchor: 锚点相机姿态
+        c2ws_anchor: 锚点相机姿态，
+        c2ws_anchor 是相机到世界坐标系的变换矩阵（Camera-to-World transformation matrix）。
+        在这个项目中，它代表原始输入图像对应的相机姿态。（？）
+
         H, W: 图像高度和宽度
         fs: 焦距
         c: 主点
@@ -420,46 +424,55 @@ def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_
         cameras: PyTorch3D相机对象
         num_views: 视角数量
     """
-    
-    # 1) 从json文件中读取相机姿态
+    # 1) 读取相机姿态
     camera_poses_path = os.path.join(save_dir, 'camera_poses.json')
     with open(camera_poses_path, 'r') as f:
         camera_poses = json.load(f)
-        # 从所有pose中均匀采样frame个，确保数量符合要求
         step = max(1, len(camera_poses) // frame)
         camera_poses = camera_poses[::step][:frame]
 
-    # 2) 解析position & orientation，构建c2w矩阵
+    # 2) 获取原始anchor相机的姿态作为参考
+    anchor_R = c2ws_anchor[0, :3, :3]  # 原始参考相机的旋转矩阵
+    anchor_T = c2ws_anchor[0, :3, 3]   # 原始参考相机的平移向量
+
+    # 3) 构建相机姿态，并与anchor对齐
     c2ws_list = []
     for pose in camera_poses:
+        # 读取BTO-RRT生成的相机姿态
         pos = torch.tensor(pose["position"], dtype=torch.float32, device=device)
         ori = torch.tensor(pose["orientation"], dtype=torch.float32, device=device)
+        
+        # 将位置从BTO-RRT坐标系转换到原始点云坐标系
+        pos = torch.matmul(anchor_R, pos) + anchor_T
+        
+        # 将旋转矩阵从BTO-RRT坐标系转换到原始点云坐标系
+        ori = torch.matmul(anchor_R, ori)
+        
+        # 构建完整的变换矩阵
         c2w = torch.eye(4, dtype=torch.float32, device=device)
         c2w[:3, :3] = ori
         c2w[:3, 3] = pos
         c2ws_list.append(c2w)
 
-    # 3) 转换为PyTorch张量
+    # 4) 转换为PyTorch张量
     c2ws = torch.stack(c2ws_list, dim=0)
     num_views = c2ws.shape[0]
 
-    # 4) 提取R, T
+    # 5) 提取R, T并转换到PyTorch3D坐标系
     R, T = c2ws[:, :3, :3], c2ws[:, :3, 3]
+    R = torch.stack([-R[:, :, 0], -R[:, :, 1], R[:, :, 2]], dim=2)  # RDF to LUF
 
-    # 5) 将Dust3r(RDF)坐标系转换为PyTorch3D(LUF)坐标系
-    R = torch.stack([-R[:, :, 0], -R[:, :, 1], R[:, :, 2]], dim=2)
-    
     # 6) 计算世界到相机的变换矩阵
     w2c = torch.zeros_like(c2ws)
     w2c[:, :3, :3] = R.transpose(1, 2)
     w2c[:, :3, 3] = -torch.bmm(R.transpose(1, 2), T.unsqueeze(-1)).squeeze(-1)
     w2c[:, 3, 3] = 1.0
 
-    # 7) 提取正确形状的R和T用于相机
-    R_new = w2c[:, :3, :3]  # (N, 3, 3)
-    T_new = w2c[:, :3, 3]   # (N, 3)
+    # 7) 提取正确形状的R和T
+    R_new = w2c[:, :3, :3]
+    T_new = w2c[:, :3, 3]
 
-    # 8) 创建PyTorch3D相机对象
+    # 8) 创建相机对象
     image_size = ((H, W),)
     cameras = PerspectiveCameras(
         focal_length=fs,
@@ -471,7 +484,7 @@ def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_
         device=device
     )
 
-    # 9) 如果需要可视化，生成轨迹视频
+    # 9) 可视化（如果需要）
     if viz_traj:
         poses = c2ws.cpu().numpy()
         frames = [visualizer_frame(poses, i) for i in range(len(poses))]

@@ -156,7 +156,16 @@ class ViewCrafter:
             else: 
                 phi, theta, r = self.gradio_traj
             camera_traj,num_views = generate_traj_txt(c2ws, H, W, focals, principal_points, phi, theta, r,self.opts.video_length, self.device,viz_traj=True, save_dir = self.opts.save_dir)
-        elif self.opts.mode == 'single_view_txt_gen_path':  
+        elif self.opts.mode == 'single_view_txt_gen_path': 
+            if not gradio:
+                with open(self.opts.traj_txt, 'r') as file:
+                    lines = file.readlines()
+                    phi = [float(i) for i in lines[0].split()]
+                    theta = [float(i) for i in lines[1].split()]
+                    r = [float(i) for i in lines[2].split()]
+            else: 
+                phi, theta, r = self.gradio_traj
+                 
             """使用BTO-RRT生成相机轨迹"""
             print("Using BTO-RRT to generate camera trajectory...")
             

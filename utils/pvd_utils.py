@@ -55,7 +55,7 @@ def get_input_dict(img_tensor,idx,dtype = torch.float32):
 
 
 def rotate_theta(c2ws_input, theta, phi, r, device): 
-    # theta: 图像的倾角,新的y’轴(位于yoz平面)与y轴的夹角
+    # theta: 图像的倾角,新的y'轴(位于yoz平面)与y轴的夹角
     #让相机在以[0,0,depth_avg]为球心的球面上运动,可以先让其在[0,0,0]为球心的球面运动，方便计算旋转矩阵，之后在平移
     c2ws = copy.deepcopy(c2ws_input)
     c2ws[:,2, 3] = c2ws[:,2, 3] + r  #将相机坐标系沿着世界坐标系-z方向平移r
@@ -346,152 +346,76 @@ def generate_traj_txt(c2ws_anchor,H,W,fs,c,phi, theta, r,frame,device,viz_traj=F
     return cameras,num_views
 
 
-# def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi, theta, r,frame,device,viz_traj=False, save_dir = None):
-#     """     
-#         纯复制只改了函数名版本，百分百能用版
-#     """
-
-#     if len(phi)>3:
-#         phis = txt_interpolation(phi,frame,mode='smooth')
-#         phis[0] = phi[0]
-#         phis[-1] = phi[-1]
-#     else:
-#         phis = txt_interpolation(phi,frame,mode='linear')
-
-#     if len(theta)>3:
-#         thetas = txt_interpolation(theta,frame,mode='smooth')
-#         thetas[0] = theta[0]
-#         thetas[-1] = theta[-1]
-#     else:
-#         thetas = txt_interpolation(theta,frame,mode='linear')
-    
-#     if len(r) >3:
-#         rs = txt_interpolation(r,frame,mode='smooth')
-#         rs[0] = r[0]
-#         rs[-1] = r[-1]        
-#     else:
-#         rs = txt_interpolation(r,frame,mode='linear')
-#     rs = rs*c2ws_anchor[0,2,3].cpu().numpy()
-
-#     c2ws_list = []
-#     for th, ph, r in zip(thetas,phis,rs):
-#         c2w_new = sphere2pose(c2ws_anchor, np.float32(th), np.float32(ph), np.float32(r), device)
-#         c2ws_list.append(c2w_new)
-#     c2ws = torch.cat(c2ws_list,dim=0) # 相机位姿 c2w 矩阵（Camera-to-World）
-
-#     if viz_traj:
-#         poses = c2ws.cpu().numpy()
-#         # visualizer(poses, os.path.join(save_dir,'viz_traj.png'))
-#         frames = [visualizer_frame(poses, i) for i in range(len(poses))]
-#         save_video(np.array(frames)/255.,os.path.join(save_dir,'viz_traj.mp4'))
-
-#     num_views = c2ws.shape[0]
-
-#     R, T = c2ws[:,:3, :3], c2ws[:,:3, 3:]
-#     print(R,T)
-#     print(f"Shape of R (Rotation Matrix): {R.shape}")
-#     print(f"Shape of T (Translation Vector): {T.shape}")
-    
-#     ## 将dust3r坐标系转成pytorch3d坐标系
-#     R = torch.stack([-R[:,:, 0], -R[:,:, 1], R[:,:, 2]], 2) # from RDF to LUF for Rotation
-#     new_c2w = torch.cat([R, T], 2)
-#     w2c = torch.linalg.inv(torch.cat((new_c2w, torch.Tensor([[[0,0,0,1]]]).to(device).repeat(new_c2w.shape[0],1,1)),1))
-#     R_new, T_new = w2c[:,:3, :3].permute(0,2,1), w2c[:,:3, 3] # convert R to row-major matrix
-#     image_size = ((H, W),)  # (h, w)
-#     cameras = PerspectiveCameras(focal_length=fs, principal_point=c, in_ndc=False, image_size=image_size, R=R_new, T=T_new, device=device)
-#     return cameras,num_views
-
-def generate_traj_txt_genpath(
-    c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_traj=False,save_dir=None):
+def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_traj=False,save_dir=None):
     """
-    修改版:
-    不再根据输入的 phi, theta, r 等参数插值生成相机轨迹，
-    而是直接读取本地 camera_poses.json 文件中的姿态 (position + orientation)。
+    使用BTO-RRT生成的相机轨迹来创建相机姿态。
     
-    json 文件结构示例(每个元素对应一个相机位姿):
-    [
-        {
-            "position": [x, y, z],
-            "orientation": [
-                [r11, r12, r13],
-                [r21, r22, r23],
-                [r31, r32, r33]
-            ]
-        },
-        ...
-    ]
-    
-    读取后, 构造 c2w(相机到世界) 的 4x4 矩阵,
-    并统一转换到 PyTorch3D 所需的坐标系和 w2c(世界到相机) 变换。
-    
-    :return:
-        cameras: 由 PyTorch3D 的 PerspectiveCameras 构造的相机对象 (N 个相机)
-        num_views: 相机的数量 N
+    Args:
+        c2ws_anchor: 锚点相机姿态
+        H, W: 图像高度和宽度
+        fs: 焦距
+        c: 主点
+        phi, theta, r: 不使用，保留参数是为了保持接口一致
+        frame: 期望的帧数
+        device: 计算设备
+        viz_traj: 是否可视化轨迹
+        save_dir: 保存目录
+        
+    Returns:
+        cameras: PyTorch3D相机对象
+        num_views: 视角数量
     """
     
-    print("generate_traj_txt_genpath...")
-    # 1) 从 json 文件中读取 camera poses
-    with open("/inspire/hdd/ws-f4d69b29-e0a5-44e6-bd92-acf4de9990f0/public-project/pengzimian-241108540199/project/ViewCrafter/camera_poses1.json", "r") as f:
+    # 1) 从json文件中读取相机姿态
+    camera_poses_path = os.path.join(save_dir, 'camera_poses.json')
+    with open(camera_poses_path, 'r') as f:
         camera_poses = json.load(f)
-        camera_poses = camera_poses[::2]# 从50个取出25个
+        # 从50个取出frame个，确保数量符合要求
+        step = max(1, len(camera_poses) // frame)
+        camera_poses = camera_poses[::step][:frame]
 
-    # 2) 解析 position & orientation，并构建 c2w 矩阵
+    # 2) 解析position & orientation，构建c2w矩阵
     c2ws_list = []
     for pose in camera_poses:
-        pos = np.array(pose["position"], dtype=np.float32)        # [x, y, z]
-        ori = np.array(pose["orientation"], dtype=np.float32)    # 3x3
+        pos = np.array(pose["position"], dtype=np.float32)
+        ori = np.array(pose["orientation"], dtype=np.float32)
         c2w = np.eye(4, dtype=np.float32)
         c2w[:3, :3] = ori
-        c2w[:3, 3]  = pos
+        c2w[:3, 3] = pos
         c2ws_list.append(c2w)
 
-    # 拼成 (N, 4, 4) 的张量
-    c2ws_np = np.stack(c2ws_list, axis=0)  # shape: (N, 4, 4)
-    c2ws = torch.from_numpy(c2ws_np).to(device)  # 转到 GPU 或指定 device
-
-    # 3) 获取相机的数量
+    # 3) 转换为PyTorch张量
+    c2ws = torch.from_numpy(np.stack(c2ws_list, axis=0)).to(device)
     num_views = c2ws.shape[0]
 
-    # 4) 提取 R, T，注意 R.shape = (N,3,3), T.shape = (N,3,1)
-    R = c2ws[:, :3, :3]               # (N,3,3)
-    T = c2ws[:, :3, 3:]  # 有些时候可能需要显式保持 (N,3,1)
+    # 4) 提取R, T
+    R, T = c2ws[:, :3, :3], c2ws[:, :3, 3:]
 
-    print(f"[DEBUG] c2w shape: {c2ws.shape}")
-    print(f"[DEBUG] R shape: {R.shape}, T shape: {T.shape}")
+    # 5) 将Dust3r(RDF)坐标系转换为PyTorch3D(LUF)坐标系
+    R = torch.stack([-R[:, :, 0], -R[:, :, 1], R[:, :, 2]], dim=2)
+    new_c2w = torch.cat([R, T], dim=2)
 
-    # 5) 将 Dust3r(RDF) -> PyTorch3D(LUF)，这里假设json的orientation 是 RDF
-    R_luf = torch.stack([-R[:, :, 0], -R[:, :, 1], R[:, :, 2]], dim=2)
-    # 替换 R
-    R = R_luf
+    # 6) 计算世界到相机的变换矩阵
+    w2c = torch.linalg.inv(torch.cat((new_c2w, torch.Tensor([[[0,0,0,1]]]).to(device).repeat(new_c2w.shape[0],1,1)), 1))
+    R_new, T_new = w2c[:,:3, :3].permute(0,2,1), w2c[:,:3, 3]
 
-    # 6) 拼接出新的 c2w (N, 3, 4)，再补一行 [0,0,0,1] 做逆矩阵
-    #    目的是获得 w2c
-    new_c2w = torch.cat([R, T], dim=2)  # (N, 3, 4)
-    ones_row = torch.tensor([[[0, 0, 0, 1]]], dtype=new_c2w.dtype, device=device).repeat(num_views, 1, 1)
-    # 拼成 (N, 4, 4)
-    new_c2w_4x4 = torch.cat([new_c2w, ones_row], dim=1)
-
-    # 7) 求逆，得到世界到相机（w2c）
-    w2c = torch.linalg.inv(new_c2w_4x4)  # (N,4,4)
-
-    # 8) 解析出 R_new, T_new，PyTorch3D 希望 R 是 row-major
-    #    这里先截取 (N,3,3)，再 permute(0,2,1)，得到 row-major
-    R_new = w2c[:, :3, :3].permute(0, 2, 1).contiguous()  # (N,3,3)
-    T_new = w2c[:, :3, 3]                                # (N,3)
-
-    print(f"[DEBUG] R_new shape: {R_new.shape}, T_new shape: {T_new.shape}")
-
-    # 9) 构建 PyTorch3D 的相机对象
-    image_size = ((H, W),)  # (height, width) in a tuple
+    # 7) 创建PyTorch3D相机对象
+    image_size = ((H, W),)
     cameras = PerspectiveCameras(
-        focal_length=fs,         # 可是可能需要 (fx, fy) = fs
-        principal_point=c,       # (cx, cy)
-        in_ndc=False,            # 常见外参设置
-        image_size=image_size, 
-        R=R_new, 
-        T=T_new, 
+        focal_length=fs,
+        principal_point=c,
+        in_ndc=False,
+        image_size=image_size,
+        R=R_new,
+        T=T_new,
         device=device
     )
+
+    # 8) 如果需要可视化，生成轨迹视频
+    if viz_traj:
+        poses = c2ws.cpu().numpy()
+        frames = [visualizer_frame(poses, i) for i in range(len(poses))]
+        save_video(np.array(frames)/255., os.path.join(save_dir, 'viz_traj.mp4'))
 
     return cameras, num_views
 

@@ -156,21 +156,21 @@ class ViewCrafter:
             else: 
                 phi, theta, r = self.gradio_traj
             camera_traj,num_views = generate_traj_txt(c2ws, H, W, focals, principal_points, phi, theta, r,self.opts.video_length, self.device,viz_traj=True, save_dir = self.opts.save_dir)
-            # print(camera_traj)
-            # print(num_views)
         elif self.opts.mode == 'single_view_txt_gen_path':  
-            """接入gen_path"""
-            print("gen_path mode")
-            if not gradio:
-                """这里读取的traj txt文件，怎么从球坐标转换成 空间轨迹点的 呢
-                """
-                with open(self.opts.traj_txt, 'r') as file:
-                    lines = file.readlines()
-                    phi = [float(i) for i in lines[0].split()]
-                    theta = [float(i) for i in lines[1].split()]
-                    r = [float(i) for i in lines[2].split()]
-            else: 
-                phi, theta, r = self.gradio_traj
+            """使用BTO-RRT生成相机轨迹"""
+            print("Using BTO-RRT to generate camera trajectory...")
+            
+            # 1. 保存点云为PLY文件
+            pcd_path = os.path.join(self.opts.save_dir, 'scene.ply')
+            # save_pointcloud_with_normals([imgs[-1]], [pcd[-1]], masks, pcd_path, mask_pc=False, reduce_pc=False)
+            save_pointcloud_with_normals([imgs[-1]], [pcd[-1]], msk=None, save_path=pcd_path , mask_pc=False, reduce_pc=False)
+            
+            # 2. 调用BTO-RRT生成轨迹
+            sys.path.append('./gen_path')
+            from bto-rrtv3 import main as bto_rrt_main
+            bto_rrt_main(pcd_path=pcd_path)
+            
+            # 3. 使用生成的轨迹创建相机视图
             camera_traj,num_views = generate_traj_txt_genpath(c2ws, H, W, focals, principal_points, phi, theta, r,self.opts.video_length, self.device,viz_traj=True, save_dir = self.opts.save_dir)
         else:
             raise KeyError(f"Invalid Mode: {self.opts.mode}")
@@ -183,7 +183,8 @@ class ViewCrafter:
                 render_results[-1] = self.img_ori
                 
         save_video(render_results, os.path.join(self.opts.save_dir, 'render0.mp4'))
-        save_pointcloud_with_normals([imgs[-1]], [pcd[-1]], msk=None, save_path=os.path.join(self.opts.save_dir,'pcd0.ply') , mask_pc=False, reduce_pc=False)
+        # 前面提前保存了点云，这里不再保存
+        # save_pointcloud_with_normals([imgs[-1]], [pcd[-1]], msk=None, save_path=os.path.join(self.opts.save_dir,'pcd0.ply') , mask_pc=False, reduce_pc=False)
         diffusion_results = self.run_diffusion(render_results)
         save_video((diffusion_results + 1.0) / 2.0, os.path.join(self.opts.save_dir, 'diffusion0.mp4'))
 

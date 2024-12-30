@@ -105,7 +105,10 @@ class ViewCrafter:
 
         return torch.clamp(batch_samples[0][0].permute(1,2,3,0), -1., 1.) 
 
-    def nvs_single_view(self, gradio=False):
+    def nvs_single_view(self, gradio=False): 
+        """
+            默认
+        """
         # 最后一个view为 0 pose
         c2ws = self.scene.get_im_poses().detach()[1:] 
         principal_points = self.scene.get_principal_points().detach()[1:] #cx cy
@@ -143,6 +146,8 @@ class ViewCrafter:
             camera_traj,num_views = generate_traj_specified(c2ws, H, W, focals, principal_points, self.opts.d_theta[0], self.opts.d_phi[0], self.opts.d_r[0],self.opts.d_x[0]*depth_avg/focals.item(),self.opts.d_y[0]*depth_avg/focals.item(),self.opts.video_length, self.device)
         elif self.opts.mode == 'single_view_txt':
             if not gradio:
+                """这里读取的traj txt文件，怎么从球坐标转换成 空间轨迹点的 呢
+                """
                 with open(self.opts.traj_txt, 'r') as file:
                     lines = file.readlines()
                     phi = [float(i) for i in lines[0].split()]
@@ -151,6 +156,22 @@ class ViewCrafter:
             else: 
                 phi, theta, r = self.gradio_traj
             camera_traj,num_views = generate_traj_txt(c2ws, H, W, focals, principal_points, phi, theta, r,self.opts.video_length, self.device,viz_traj=True, save_dir = self.opts.save_dir)
+            # print(camera_traj)
+            # print(num_views)
+        elif self.opts.mode == 'single_view_txt_gen_path':  
+            """接入gen_path"""
+            print("gen_path mode")
+            if not gradio:
+                """这里读取的traj txt文件，怎么从球坐标转换成 空间轨迹点的 呢
+                """
+                with open(self.opts.traj_txt, 'r') as file:
+                    lines = file.readlines()
+                    phi = [float(i) for i in lines[0].split()]
+                    theta = [float(i) for i in lines[1].split()]
+                    r = [float(i) for i in lines[2].split()]
+            else: 
+                phi, theta, r = self.gradio_traj
+            camera_traj,num_views = generate_traj_txt_genpath(c2ws, H, W, focals, principal_points, phi, theta, r,self.opts.video_length, self.device,viz_traj=True, save_dir = self.opts.save_dir)
         else:
             raise KeyError(f"Invalid Mode: {self.opts.mode}")
 

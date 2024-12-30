@@ -21,6 +21,9 @@ if __name__=="__main__":
     elif opts.mode == 'single_view_txt':
         pvd.nvs_single_view()
 
+    elif opts.mode == 'single_view_txt_gen_path':
+        pvd.nvs_single_view()
+        
     elif opts.mode == 'single_view_eval':
         pvd.nvs_single_view_eval()
 

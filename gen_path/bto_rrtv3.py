@@ -233,7 +233,7 @@ def main(pcd_path=None):
     try:
         # Load point cloud
         if pcd_path is None:
-            ptCloud = o3d.io.read_point_cloud('room.ply')
+            ptCloud = o3d.io.read_point_cloud('scene.ply')
         else:
             ptCloud = o3d.io.read_point_cloud(pcd_path)
             

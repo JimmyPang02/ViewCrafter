@@ -167,7 +167,7 @@ class ViewCrafter:
             
             # 2. 调用BTO-RRT生成轨迹
             sys.path.append('./gen_path')
-            from bto-rrtv3 import main as bto_rrt_main
+            from bto_rrtv3 import main as bto_rrt_main
             bto_rrt_main(pcd_path=pcd_path)
             
             # 3. 使用生成的轨迹创建相机视图

@@ -4,8 +4,6 @@ v3: 实现生成相机位姿序列的功能（切线or始终看中间）
 import numpy as np
 import open3d as o3d
 import matplotlib.pyplot as plt
-import json
-import os
 
 
 def generateRandomPoint(ptCloud):
@@ -229,14 +227,96 @@ def upsample(path, ptCloud, sizemax, params, ptCloud_tree):
     return P
 
 
-def main(pcd_path=None):
+def visualize_initial_scene(ptCloud, q_init, q_goal, boundaries, cloud_scale_max):
+    """
+    可视化初始场景，包括点云、边界框、起点和终点
+    
+    Args:
+        ptCloud: 输入的点云数据
+        q_init: 起始点位置
+        q_goal: 目标点位置
+        boundaries: 包含边界信息的字典 {'x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max'}
+        cloud_scale_max: 点云的最大尺度
+    """
+    print("\n正在可视化初始点云和起始点位置...")
+    initial_geometries = []
+    
+    # 添加点云
+    initial_geometries.append(ptCloud)
+    
+    # 计算并添加XY平面中心点（黄色）
+    xy_center = np.array([
+        (boundaries['x_min'] + boundaries['x_max']) / 2,
+        (boundaries['y_min'] + boundaries['y_max']) / 2,
+        boundaries['z_max']  # 在最高z高度的XY平面上
+    ])
+    center_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=cloud_scale_max * 0.02)
+    center_sphere.translate(xy_center)
+    center_sphere.paint_uniform_color([1, 1, 0])  # 黄色
+    initial_geometries.append(center_sphere)
+    
+    # 打印中心点坐标
+    print(f"\nXY平面中心点坐标（最高处）: ({xy_center[0]:.2f}, {xy_center[1]:.2f}, {xy_center[2]:.2f})")
+    
+    # 添加边界点（8个顶点）
+    boundary_points = [
+        [boundaries['x_min'], boundaries['y_min'], boundaries['z_min']],  # 前下左
+        [boundaries['x_max'], boundaries['y_min'], boundaries['z_min']],  # 前下右
+        [boundaries['x_min'], boundaries['y_max'], boundaries['z_min']],  # 后下左
+        [boundaries['x_max'], boundaries['y_max'], boundaries['z_min']],  # 后下右
+        [boundaries['x_min'], boundaries['y_min'], boundaries['z_max']],  # 前上左
+        [boundaries['x_max'], boundaries['y_min'], boundaries['z_max']],  # 前上右
+        [boundaries['x_min'], boundaries['y_max'], boundaries['z_max']],  # 后上左
+        [boundaries['x_max'], boundaries['y_max'], boundaries['z_max']]   # 后上右
+    ]
+    
+    # 创建边界点的可视化（绿色球体）
+    for point in boundary_points:
+        boundary_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=cloud_scale_max * 0.015)
+        boundary_sphere.translate(point)
+        boundary_sphere.paint_uniform_color([0, 1, 0])  # 绿色
+        initial_geometries.append(boundary_sphere)
+        
+    # 创建边界框线条
+    lines = [
+        [0, 1], [1, 3], [3, 2], [2, 0],  # 底面
+        [4, 5], [5, 7], [7, 6], [6, 4],  # 顶面
+        [0, 4], [1, 5], [2, 6], [3, 7]   # 竖直边
+    ]
+    colors = [[0, 1, 0] for _ in range(len(lines))]  # 绿色线条
+    line_set = o3d.geometry.LineSet(
+        points=o3d.utility.Vector3dVector(boundary_points),
+        lines=o3d.utility.Vector2iVector(lines)
+    )
+    line_set.colors = o3d.utility.Vector3dVector(colors)
+    initial_geometries.append(line_set)
+    
+    # 添加起点（蓝色球体）
+    start_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=cloud_scale_max * 0.01)
+    start_sphere.translate(q_init[0:3])
+    start_sphere.paint_uniform_color([0, 0, 1])  # 蓝色
+    initial_geometries.append(start_sphere)
+    
+    # 添加终点（红色球体）
+    goal_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=cloud_scale_max * 0.01)
+    goal_sphere.translate(q_goal[0:3])
+    goal_sphere.paint_uniform_color([1, 0, 0])  # 红色
+    initial_geometries.append(goal_sphere)
+    
+    # 可视化初始场景
+    o3d.visualization.draw_geometries(initial_geometries)
+
+
+def main(path=None):
     try:
         # Load point cloud
-        if pcd_path is None:
+        print("开始加载点云...")
+        # Load point cloud
+        if path is None:
             ptCloud = o3d.io.read_point_cloud('scene.ply')
         else:
-            ptCloud = o3d.io.read_point_cloud(pcd_path)
-            
+            ptCloud = o3d.io.read_point_cloud(path)
+
         if not ptCloud.has_points():
             raise ValueError("Point cloud is empty or file could not be opened.")
 
@@ -248,6 +328,13 @@ def main(pcd_path=None):
         x_min, y_min, z_min = xyz.min(axis=0)
         x_max, y_max, z_max = xyz.max(axis=0)
         sizemax = {'x': x_max, 'y': y_max, 'h': z_max}
+        
+        # 存储边界信息
+        boundaries = {
+            'x_min': x_min, 'x_max': x_max,
+            'y_min': y_min, 'y_max': y_max,
+            'z_min': z_min, 'z_max': z_max
+        }
 
         # Compute cloud scale
         cloud_scale_x = x_max - x_min
@@ -265,7 +352,12 @@ def main(pcd_path=None):
 
         # Initialize start and goal positions
         random_goal = generateRandomPoint(ptCloud)
-        q_init = np.array([0, 0, 0, 0, 0, -1])  # Fixed initial position
+        q_init = np.array([
+            (x_max + x_min) / 2,  # x中心
+            (y_max + y_min) / 2,  # y中心
+            z_max,                # 最高处z
+            0, 0, -1
+        ])
         q_goal = np.array([random_goal[0], random_goal[1], random_goal[2], 1, 0, -1])
 
         # Ensure initial and goal positions are within valid range
@@ -273,6 +365,17 @@ def main(pcd_path=None):
         q_goal[0:3] = np.clip(q_goal[0:3], 0, [sizemax['x'], sizemax['y'], sizemax['h']])
 
         # Ensure initial and goal positions are not inside obstacles
+        start_safe = not checkpoint(q_init[0:3], ptCloud, params, ptCloud_tree)
+        goal_safe = not checkpoint(q_goal[0:3], ptCloud, params, ptCloud_tree)
+
+        print("\n安全性检查:")
+        print(f"起点是否安全: {start_safe}")
+        print(f"终点是否安全: {goal_safe}")
+        print(f"安全距离参数: {params['safe_dist']}")
+
+        # 调用可视化函数
+        visualize_initial_scene(ptCloud, q_init, q_goal, boundaries, cloud_scale_max)
+
         while checkpoint(q_init[0:3], ptCloud, params, ptCloud_tree) or checkpoint(q_goal[0:3], ptCloud, params, ptCloud_tree):
             if checkpoint(q_goal[0:3], ptCloud, params, ptCloud_tree):
                 q_goal[0:3] = generateRandomPoint(ptCloud)
@@ -397,6 +500,7 @@ def main(pcd_path=None):
             else:
                 print("Keypoints are not sufficient for spline fitting.")
 
+
         # **Compute camera poses along the spline path**
         camera_poses = []
         if 'spline_points' in locals() and spline_points.shape[0] > 1:
@@ -435,15 +539,24 @@ def main(pcd_path=None):
 
                 # Store camera pose (position and orientation)
                 camera_pose = {
-                    'position': position.tolist(),
-                    'orientation': rotation_matrix.tolist()
+                    'position': position,
+                    'orientation': rotation_matrix
                 }
                 camera_poses.append(camera_pose)
 
-        # Save camera poses to a JSON file
+        # **Optionally, save camera poses to a file or use them as needed**
+        # For example, save to a JSON file
+        import json
+        camera_poses_serializable = []
+        for pose in camera_poses:
+            camera_poses_serializable.append({
+                'position': pose['position'].tolist(),
+                'orientation': pose['orientation'].tolist()
+            })
         with open('camera_poses.json', 'w') as f:
-            json.dump(camera_poses, f, indent=4)
+            json.dump(camera_poses_serializable, f, indent=4)
 
+        # vis
         # Add start and goal points
         start_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=cloud_scale_max * 0.01)
         start_sphere.translate(q_init[0:3])
@@ -457,6 +570,7 @@ def main(pcd_path=None):
 
         # Visualize all geometries
         o3d.visualization.draw_geometries(geometries)
+
 
     except ValueError as e:
         print(f"Error: {e}")

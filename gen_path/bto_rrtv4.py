@@ -4,7 +4,7 @@ v3: 实现生成相机位姿序列的功能（切线or始终看中间）
 import numpy as np
 import open3d as o3d
 import matplotlib.pyplot as plt
-
+import os
 
 def generateRandomPoint(ptCloud):
     # scale factor
@@ -307,15 +307,15 @@ def visualize_initial_scene(ptCloud, q_init, q_goal, boundaries, cloud_scale_max
     o3d.visualization.draw_geometries(initial_geometries)
 
 
-def main(path=None):
+def main(pcd_path=None,save_path=None):
     try:
         # Load point cloud
         print("开始加载点云...")
         # Load point cloud
-        if path is None:
+        if pcd_path is None:
             ptCloud = o3d.io.read_point_cloud('scene.ply')
         else:
-            ptCloud = o3d.io.read_point_cloud(path)
+            ptCloud = o3d.io.read_point_cloud(pcd_path)
 
         if not ptCloud.has_points():
             raise ValueError("Point cloud is empty or file could not be opened.")
@@ -553,7 +553,9 @@ def main(path=None):
                 'position': pose['position'].tolist(),
                 'orientation': pose['orientation'].tolist()
             })
-        with open('camera_poses.json', 'w') as f:
+        
+        camera_poses_path = os.path.join(save_path, 'camera_poses.json')
+        with open(camera_poses_path, 'w') as f:
             json.dump(camera_poses_serializable, f, indent=4)
 
         # vis

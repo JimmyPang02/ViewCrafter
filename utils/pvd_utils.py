@@ -425,36 +425,41 @@ def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_
     camera_poses_path = os.path.join(save_dir, 'camera_poses.json')
     with open(camera_poses_path, 'r') as f:
         camera_poses = json.load(f)
-        # 从50个取出frame个，确保数量符合要求
+        # 从所有pose中均匀采样frame个，确保数量符合要求
         step = max(1, len(camera_poses) // frame)
         camera_poses = camera_poses[::step][:frame]
 
     # 2) 解析position & orientation，构建c2w矩阵
     c2ws_list = []
     for pose in camera_poses:
-        pos = np.array(pose["position"], dtype=np.float32)
-        ori = np.array(pose["orientation"], dtype=np.float32)
-        c2w = np.eye(4, dtype=np.float32)
+        pos = torch.tensor(pose["position"], dtype=torch.float32, device=device)
+        ori = torch.tensor(pose["orientation"], dtype=torch.float32, device=device)
+        c2w = torch.eye(4, dtype=torch.float32, device=device)
         c2w[:3, :3] = ori
         c2w[:3, 3] = pos
         c2ws_list.append(c2w)
 
     # 3) 转换为PyTorch张量
-    c2ws = torch.from_numpy(np.stack(c2ws_list, axis=0)).to(device)
+    c2ws = torch.stack(c2ws_list, dim=0)
     num_views = c2ws.shape[0]
 
     # 4) 提取R, T
-    R, T = c2ws[:, :3, :3], c2ws[:, :3, 3:]
+    R, T = c2ws[:, :3, :3], c2ws[:, :3, 3]
 
     # 5) 将Dust3r(RDF)坐标系转换为PyTorch3D(LUF)坐标系
     R = torch.stack([-R[:, :, 0], -R[:, :, 1], R[:, :, 2]], dim=2)
-    new_c2w = torch.cat([R, T], dim=2)
-
+    
     # 6) 计算世界到相机的变换矩阵
-    w2c = torch.linalg.inv(torch.cat((new_c2w, torch.Tensor([[[0,0,0,1]]]).to(device).repeat(new_c2w.shape[0],1,1)), 1))
-    R_new, T_new = w2c[:,:, :3].permute(0,2,1), w2c[:,:, 3]
+    w2c = torch.zeros_like(c2ws)
+    w2c[:, :3, :3] = R.transpose(1, 2)
+    w2c[:, :3, 3] = -torch.bmm(R.transpose(1, 2), T.unsqueeze(-1)).squeeze(-1)
+    w2c[:, 3, 3] = 1.0
 
-    # 7) 创建PyTorch3D相机对象
+    # 7) 提取正确形状的R和T用于相机
+    R_new = w2c[:, :3, :3]  # (N, 3, 3)
+    T_new = w2c[:, :3, 3]   # (N, 3)
+
+    # 8) 创建PyTorch3D相机对象
     image_size = ((H, W),)
     cameras = PerspectiveCameras(
         focal_length=fs,
@@ -466,7 +471,7 @@ def generate_traj_txt_genpath(c2ws_anchor,H,W,fs,c,phi,theta,r,frame,device,viz_
         device=device
     )
 
-    # 8) 如果需要可视化，生成轨迹视频
+    # 9) 如果需要可视化，生成轨迹视频
     if viz_traj:
         poses = c2ws.cpu().numpy()
         frames = [visualizer_frame(poses, i) for i in range(len(poses))]

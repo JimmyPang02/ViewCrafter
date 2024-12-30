@@ -364,15 +364,6 @@ def main(pcd_path=None,save_path=None):
         q_init[0:3] = np.clip(q_init[0:3], 0, [sizemax['x'], sizemax['y'], sizemax['h']])
         q_goal[0:3] = np.clip(q_goal[0:3], 0, [sizemax['x'], sizemax['y'], sizemax['h']])
 
-        # Ensure initial and goal positions are not inside obstacles
-        start_safe = not checkpoint(q_init[0:3], ptCloud, params, ptCloud_tree)
-        goal_safe = not checkpoint(q_goal[0:3], ptCloud, params, ptCloud_tree)
-
-        print("\n安全性检查:")
-        print(f"起点是否安全: {start_safe}")
-        print(f"终点是否安全: {goal_safe}")
-        print(f"安全距离参数: {params['safe_dist']}")
-
         # 调用可视化函数
         visualize_initial_scene(ptCloud, q_init, q_goal, boundaries, cloud_scale_max)
 
